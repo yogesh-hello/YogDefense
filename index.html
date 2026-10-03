@@ -5,51 +5,108 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>
-      Full Page Direct Host
-    </title>
+    <title>Full Page Direct Host</title>
     <style>
-      /* Base styles to prevent scrollbars before the sketch loads */
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            width: 100%;
-            overflow: hidden;
-            background-color: #000; /* Optional: hides the white flash while fetching */
-        }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        background-color: #000;
+      }
     </style>
   </head>
   <body>
     <script>
-    const baseUrl = `https://preview.openprocessing.org/sketch/2916368/preview/false/`;
-    const targetUrl = baseUrl + &#34;index.html?random=&#34; + Number(Math.random().toFixed(15));
+      const sketchId = "2916368";
+      const baseUrl = `https://preview.openprocessing.org/sketch/${sketchId}/preview/false/`;
+      
+      // 1. Check if the URL tells us to load a specific sub-page
+      const urlParams = new URLSearchParams(window.location.search);
+      const requestedUrl = urlParams.get('load');
+      
+      let targetUrl;
+      if (requestedUrl) {
+        targetUrl = requestedUrl;
+      } else {
+        const random15 = Number(Math.random().toFixed(15));
+        targetUrl = baseUrl + "index.html?random=" + random15;
+      }
 
-    fetch(targetUrl)
-        .then(response =&gt; {
-            if (!response.ok) throw new Error(&#34;Failed to fetch sketch code.&#34;);
+      function getInterceptorScript(baseUrl) {
+        return `
+          <script id="host-interceptor">
+            (function() {
+              const BASE_URL = "${baseUrl}";
+
+              // 2. Instead of fetching in the background, update the host URL and trigger a hard reload
+              window.loadAndHost = function(url) {
+                const nextUrl = new URL(url, BASE_URL).href;
+                
+                // Get the current host page URL (ignoring any existing ?load params)
+                const hostUrl = new URL(window.location.href.split('?')[0]);
+                hostUrl.searchParams.set('load', nextUrl);
+                
+                // Triggers a real browser reload to clear old JS state
+                window.location.assign(hostUrl.href);
+              };
+
+              Object.defineProperty(window, '__interceptNav', {
+                set: function(url) {
+                  window.loadAndHost(url);
+                },
+                configurable: true
+              });
+
+              window.__interceptNavFn = function(url) {
+                window.loadAndHost(url);
+              };
+
+              document.addEventListener('click', function(e) {
+                const link = e.target.closest('a');
+                if (!link) return;
+
+                const href = link.getAttribute('href');
+                if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+
+                e.preventDefault();
+                window.loadAndHost(href);
+              }, true);
+            })();
+          <\/script>
+        `;
+      }
+
+      function fetchInitialPage(url) {
+        fetch(url)
+          .then(response => {
+            if (!response.ok) throw new Error("Failed to fetch sketch code.");
             return response.text();
-        })
-        .then(html =&gt; {
-            // 1. Create a &lt;base&gt; tag. 
-            // This is the magic step for ES Modules. It tells the browser that 
-            // any relative import like &#34;./myModule.js&#34; should resolve to &#39;baseUrl&#39;
-            const baseTag = `&lt;base href=&#34;${baseUrl}&#34;&gt;`;
-            
-            // 2. Inject the base tag right after the opening &lt;head&gt; tag
-            const newHtml = html.replace(/(&lt;head[^&gt;]*&gt;)/i, `$1\n    ${baseTag}`);
+          })
+          .then(html => {
+            let safeHtml = html
+              .replace(/(?:window\.)?location(?:\.href)?\s*=(?!=)/g, 'window.__interceptNav = ')
+              .replace(/(?:window\.)?location\.(assign|replace)\s*\(/g, 'window.__interceptNavFn(');
 
-            // 3. Completely overwrite the current document with the fetched sketch
+            const baseTag = `<base href="${baseUrl}">`;
+            const interceptor = getInterceptorScript(baseUrl);
+
+            const newHtml = safeHtml.replace(/(<head[^>]*>)/i, `$1\n    ${baseTag}\n    ${interceptor}`);
+
             document.open();
             document.write(newHtml);
             document.close();
-        })
-        .catch(error =&gt; {
-            console.error(&#34;Fetch error:&#34;, error);
-            document.body.innerHTML = `&lt;h3 style=&#34;color:white; text-align:center; margin-top:20px;&#34;&gt;
+          })
+          .catch(error => {
+            console.error("Fetch error:", error);
+            document.body.innerHTML = `<h3 style="color:white; text-align:center; margin-top:20px;">
                 Failed to fetch code. Check the console for CORS errors.
-            &lt;/h3&gt;`;
-        });
+            </h3>`;
+          });
+      }
+
+      fetchInitialPage(targetUrl);
     </script>
   </body>
 </html>
